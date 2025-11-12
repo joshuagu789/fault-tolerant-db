@@ -5,13 +5,13 @@
 # Overview #
 
 ### Goal ###
-The goal of this assignment is to use consensus to build a fault-tolerant replicated datastore application using one of the following three options (two for extra credit):
+The goal of this assignment is to use consensus to build a fault-tolerant replicated datastore application using two of the following three options (third for optional extra credit):
 
-1. **Coordination server** (Zookeeper): A coordination protocol using Zookeeper as a logically centralized service accessible to all replicas;
+1. **Replicated state machine** (GigaPaxos): GigaPaxos to encapsulate the application as an RSM;
 
-2. **Replicated state machine** (GigaPaxos): GigaPaxos to encapsulate the application as an RSM;
+2. **Coordination server** (Zookeeper): A coordination protocol using Zookeeper as a logically centralized service accessible to all replicas;
 
-3. **Custom protocol** (Custom): Your own coordination protocol possibly using a globally accessible logically centralized file system or database for coordination (an option analogous to #1 but not forcing you to use Zookeeper). If you use this approach and use cassandra itself like "zookeeper" as a coordination server, you must absolutely make sure that the coordination keyspace is completely isolated from the keyspace used by unit tests where safety critical state is maintained.
+3. **Custom protocol (optional extra credit)** (Custom): Use an approach other than the above two to make your system fault-tolerant. Here are some suggestions: 1) Use an alternative consensus algorithm like Raft (many java implementations available online) in your server implementation; 2) Use a globally accessible logically centralized file system region or database for coordination, which is an option analogous to the Zookeeper option but using your own coordination service. If you use this approach and use cassandra itself as your coordination service, you must absolutely make sure that the coordination keyspace is completely isolated from the keyspace used by unit tests where safety critical state is maintained; 3) Implement your own fault-tolerant-consensus-based server-to-server protocol that is good enough to pass the tests. Note: Option #3 is not easy, but you may be able to do a good enough job to pass the tests without a complee and efficient implementation.
 
 ### Prerequisites ###
 
@@ -72,7 +72,7 @@ Your implementation must respect the following constraints, but these are not me
 
 # Getting started #
 
-Start by running your consistency-only replicated server (or using the [sample solution](https://bitbucket.org/distrsys/fault-tolerant-db/src/master/src/server/AVDBReplicatedServer.java) with [STUDENT_TESTING_MODE`=false`](https://bitbucket.org/distrsys/fault-tolerant-db/src/9a12b86469508854d641de52f19170ec6db712b5/test/GraderCommonSetup.java#lines-93)) by running GraderConsistency. You should see the old consistency-only tests pass. ~~You should also see at least the first test in `GraderFaultTolerance` pass~~.
+Start by running your consistency-only replicated server (or using the [sample solution](https://bitbucket.org/distrsys/fault-tolerant-db/src/master/src/server/AVDBReplicatedServer.java) with [STUDENT_TESTING_MODE`=false`](https://bitbucket.org/distrsys/fault-tolerant-db/src/9a12b86469508854d641de52f19170ec6db712b5/test/GraderCommonSetup.java#lines-93)) by running GraderConsistency. You should see the old consistency-only tests pass. 
 
 Next, revert `STUDENT_TESTING_MODE` to its default `true`, and verify that tests in [`GraderFaultTolerance`](https://bitbucket.org/distrsys/fault-tolerant-db/src/master/test/GraderFaultTolerance.java) fail. These tests fail because both `MyDBFaultTolerantServerZK` and `MyDBReplicableApp` throw "unimplemented" runtime exceptions, which you can see by disabling the default `PROCESS_MODE=true` flag so everything runs in a single JVM.
 
@@ -98,13 +98,12 @@ From here on, you need to read the documentation of each test, understand why it
 1. In addition to the inline source documentation, there are handy tips in [`test/README.txt`](https://bitbucket.org/distrsys/fault-tolerant-db/src/master/test/README.txt) for playing with various testing/debugging options.
 2. You don't need any source code for either Zookeeper or Gigapaxos, nevertheless you are strongly encouraged to download the sources into your IDE so that you can easily browse through the documentation of available methods as well as use debuggers more effectively.
 3. You don't need any binaries other than the ones already included.
-4. You can do this assignment on Windows as well as it does not rely on any Gigapaxos on Zookeeper shell scripts, only Java.
+4. You can do this assignment on Windows as well as it does not rely on any Gigapaxos or Zookeeper shell scripts, only Java.
 5. The RSM option is probably the fewest lines of code followed by Zookeeper followed by the Custom option, however this ordering may not necessarily correspond to the amount of time you might spend getting those options to work.
-6. Do NOT try to implement your own consensus protocol as part of the Custom option as it is an overkill especially since the assignment allows you to use a global assumed-fault-tolerant storage system (file system or database) for coordination anyway.
-7. As always, the tests or config files provided are not intended to be exhaustive, and we may test your code with more stressful tests or configurations.
-8. Always remember to clear all state before every test run (e.g., paxos_logs/ in the GigaPaxos/RSM option and any files/tables/znodes you may have created in the other two options), otherwise you may be potentially carrying over bugs from previous runs.
-9. Always remember that a crash fault-tolerant consistent system must not make any changes to state without going through some kind of a consensus protocol, otherwise you will invariably end up violating safety.
-10. It is okay to assume that all application state will be contained in just the one table to which `Grader*` writes.
+6. As always, the tests or config files provided are not intended to be exhaustive, and we may test your code with more stressful tests or configurations.
+7. Always remember to clear all state before every test run (e.g., paxos_logs/ in the GigaPaxos/RSM option and any files/tables/znodes you may have created in the other two options), otherwise you may be potentially carrying over bugs from previous runs.
+8. Always remember that a crash fault-tolerant consistent system must not make any changes to state without going through some kind of a consensus protocol, otherwise you will invariably end up violating safety.
+9. It is okay to assume that all application state will be contained in just the one table to which `Grader*` writes.
 
 More based on your FAQs.
 
