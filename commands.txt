@@ -1,7 +1,11 @@
-javac  -cp "./lib/*:./src" src/server/SingleServer.java src/server/ReplicatedServer.java src/server/MyDBReplicatedServer.java src/server/faulttolerance/MyDBFaultTolerantServerZK.java src/server/faulttolerance/MyDBReplicableAppGP.java
+javac  -cp "./lib/*:./src" src/server/SingleServer.java src/server/ReplicatedServer.java src/server/MyDBReplicatedServer.java src/server/faulttolerance/MyDBFaultTolerantServerZK.java src/server/faulttolerance/MyDBReplicableAppGP.java src/server/MyDBSingleServer.java
 javac  -cp "./lib/*:./src" src/client/Client.java src/client/MyDBClient.java
 
 java -cp "./lib/*:./src/server/faulttolerance/:./src" test/GraderCommonSetup.java
+java -cp "./lib/*:./src/server/faulttolerance/:./src" test/GraderConsistency.java
+
+sudo lsof -i :3000
+sudo lsof -i :2000
 
 // Create cassandra
 docker pull cassandra:4.1.10

@@ -65,6 +65,10 @@ public class SingleServer {
 	 *             optional host name or IP.
 	 */
 	public static InetSocketAddress getSocketAddress(String[] args) {
+		for(int i = 0; i < args.length; i++) {
+			System.out.println(args[i]);
+			log.log(Level.INFO, "Arg: " + args[i]);
+		}
 		return args.length > 0 && args[0].contains(":") ? Util
 				.getInetSocketAddressFromString(args[0]) : new
 				InetSocketAddress("localhost", args.length > 0 ? Integer
