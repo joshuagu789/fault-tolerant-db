@@ -1,6 +1,7 @@
 package server.faulttolerance;
 
 import com.datastax.driver.core.Cluster;
+import com.datastax.driver.core.Session;
 import edu.umass.cs.gigapaxos.interfaces.Replicable;
 import edu.umass.cs.gigapaxos.interfaces.Request;
 import edu.umass.cs.nio.interfaces.IntegerPacketType;
@@ -13,6 +14,7 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.HashSet;
 import java.util.Set;
+// import java.util.logging.Level;
 
 /**
  * This class should implement your {@link Replicable} database app if you wish
@@ -39,6 +41,9 @@ import java.util.Set;
  */
 public class MyDBReplicableAppGP implements Replicable {
 
+    protected Cluster cluster;
+    protected Session session;
+
 	/**
 	 * Set this value to as small a value with which you can get tests to still
 	 * pass. The lower it is, the faster your implementation is. Grader* will
@@ -61,7 +66,10 @@ public class MyDBReplicableAppGP implements Replicable {
 	 */
 	public MyDBReplicableAppGP(String[] args) throws IOException {
 		// TODO: setup connection to the data store and keyspace
-		throw new RuntimeException("Not yet implemented");
+        cluster = Cluster.builder().addContactPoint("127.0.0.1").build();
+        session = cluster.connect(args[0]);
+		// throw new RuntimeException("Not yet implemented");
+		System.out.println("Replicable Giga Paxos started with keyspace " + args[0]);
 	}
 
 	/**
