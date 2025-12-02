@@ -41,8 +41,8 @@ public class GraderFaultTolerance extends GraderCommonSetup {
 /**
  * True if Gigapaxos being used, false if Zookeeper or anything else.
  */
-public static final boolean GIGAPAXOS_MODE =
-		Boolean.getBoolean(System.getProperty("gigapaxos.mode"));//false;
+public static final boolean GIGAPAXOS_MODE = true;
+		// Boolean.getBoolean(System.getProperty("gigapaxos.mode"));//false;
 
 /**
  * Maximum permitted size of any collection that is used to maintain

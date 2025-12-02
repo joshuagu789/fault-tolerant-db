@@ -3,6 +3,7 @@ javac  -cp "./lib/*:./src" src/client/Client.java src/client/MyDBClient.java
 
 java -cp "./lib/*:./src/server/faulttolerance/:./src" test/GraderCommonSetup.java
 java -cp "./lib/*:./src/server/faulttolerance/:./src" test/GraderConsistency.java
+java -cp "./lib/*:./src/server/faulttolerance/:./src" test/GraderFaultTolerance.java
 
 sudo lsof -i :3000
 sudo lsof -i :2000
