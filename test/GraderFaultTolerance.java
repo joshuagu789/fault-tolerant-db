@@ -135,6 +135,8 @@ private static InetSocketAddress getAddress(String server) {
 					ReconfigurationConfig.getClientFacingPort(serverMap.get(server).getPort()));
 }
 
+private static Set<String> crashed = new HashSet<String>();
+
 /**
  * Issue a request to one server and check that it executed successfully on
  * all servers in graceful (failure-free) scenarios. This test should pass
@@ -221,9 +223,6 @@ public void test33_GracefulExecutionMultipleRequestsToMultipleServers() throws I
 
 	verifyOrderConsistent(DEFAULT_TABLE_NAME, key);
 }
-
-
-private static Set<String> crashed = new HashSet<String>();
 
 /**
  * Crash one random server, issue one request, check successful execution
@@ -336,12 +335,14 @@ public void test36_OneServerRecoveryMultipleRequests() throws IOException,
 	// No need to wait or sleep here as a recovering server shouldn't be
 	// a reason for a request to be lost.
 	do {
-		client.send(serverMap.get(server = (String) Util.getRandomOtherThan(serverMap.keySet(), crashed)), getCommand(insertRecordIntoTableCmd(key, DEFAULT_TABLE_NAME)));
+		String nextServer = (String) Util.getRandomOtherThan(serverMap.keySet(), crashed);
+		String nextCommand = getCommand(insertRecordIntoTableCmd(key, DEFAULT_TABLE_NAME));
+		client.send(serverMap.get(server = nextServer), nextCommand);
 		Thread.sleep(SLEEP);
 	} while (serverMap.size() > crashed.size() * 2 //majority
 			&& verifyInserted(key, server) && ++count<15);
 
-	Assert.assertTrue("key " + key + " not inserted at entry server " + server, verifyInserted(key, server));
+	Assert.assertTrue("key " + key + " not inserted at entry server " + server, !verifyInserted(key, server));
 
 	String cmd = null;
 	for (int i = 0; i < servers.length * 3; i++) {

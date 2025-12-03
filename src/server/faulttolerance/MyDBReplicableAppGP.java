@@ -17,12 +17,14 @@ import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+
 import java.util.HashSet;
 import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Iterator;
 
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -234,27 +236,72 @@ public class MyDBReplicableAppGP implements Replicable {
 			String query = String.format("SELECT * FROM %s.%s", this.myID, this.table);
 			ResultSet resultSet = session.execute(query);
 
-			Map<String, String> rowData = new HashMap<>();
+			Map<String, String> rowData = new HashMap<>();	// primary key name | value -> column name | value | ...
 
 			for (Row row : resultSet) {		// for each row (basically key value pair)
 
 				ColumnDefinitions columnDefinitions = row.getColumnDefinitions();
 
-				log.log(Level.INFO, "columnDefinitions length is {0}", new Object[]{columnDefinitions.size()});	// length 2: {id=-1160459191, events=[1890]}
+				// log.log(Level.INFO, "columnDefinitions length is {0}", new Object[]{columnDefinitions.size()});	// length 2: {id=-1160459191, events=[1890]}
 
-				for (ColumnDefinitions.Definition column : columnDefinitions) {		// should be 2 items per row
+				int index = 0;
+				String primaryKey = "ERROR, PRIMARY KEY UNITIALIZED";
+
+				for (ColumnDefinitions.Definition column : columnDefinitions) {		// assume first column is primary key
 
 					String columnName = column.getName();
 					String columnValue = row.getObject(columnName).toString();
+					String columnTuple = columnName + "|" + columnValue;
 
-					rowData.put(columnName, columnValue);
+					if(columnValue.equals("")) {
+						log.log(Level.SEVERE, "SEVERE WARNING: value is empty quotes for column name {0}", new Object[]{columnName});	// length 2: {id=-1160459191, events=[1890]}
+						columnValue = "[]";
+					}
+
+					if(index == 0){	// primary key
+
+						primaryKey = columnTuple;
+						rowData.put(primaryKey, "");
+					}
+					else if(index == 1){
+						rowData.put(primaryKey, columnTuple);
+					}
+					else {
+						rowData.put(primaryKey, rowData.get(primaryKey) + "|" + columnTuple);
+					}
+					index++;
 				}
 			}
-			System.out.println("Row Data of " + this.myID + ": " + rowData.toString());
+
 			log.log(Level.INFO, "Row Data of {0}: {1}", new Object[]{this.myID, rowData.toString()});
 
-			// throw new RuntimeException("Not yet implemented");
-			return rowData.toString();
+    		JSONObject json = new JSONObject(rowData);
+
+			// try {
+			// 	JSONObject jsonObject = new JSONObject(json.toString());
+			// 	HashMap<String, String> newMap = new HashMap<>();
+			// 	Iterator<String> keys = jsonObject.keys();
+			// 	while (keys.hasNext()) {
+			// 		String key = keys.next();
+			// 		newMap.put(key, jsonObject.get(key).toString());
+			// 	}
+			// 	log.log(Level.INFO, "Restored HashMap: {0}", new Object[]{newMap.toString()});
+
+			// 	for(String key: newMap.keySet()) {
+			// 		String[] primary_and_value = key.split("\\|");
+			// 		String[] column_and_value = newMap.get(key).split("\\|");
+			// 		// log.log(Level.INFO, "primary_and_value is {0} and {1}, column is {2} and {3}", new Object[]{primary_and_value[0], primary_and_value[1], column_and_value[0], column_and_value[1]});
+				
+			// 		// update grade SET events=events+[4] where id=452700156
+			// 		String newQuery = "update " + this.table + " SET " + column_and_value[0]+"="+column_and_value[1] + " where " + primary_and_value[0]+"="+primary_and_value[1];
+			// 		this.session.execute(newQuery);
+			// 		log.log(Level.INFO, "Replicable Giga Paxos successfully restored with query: {0}", new Object[]{newQuery});
+			// 	}
+			// }
+			// catch(Exception e) {
+			// 	log.log(Level.SEVERE, "SEVERE EXCEPTION IN RESTORE: {0}", new Object[]{e});
+			// }
+			return json.toString();
 		}
 	}
 
@@ -280,8 +327,39 @@ public class MyDBReplicableAppGP implements Replicable {
 		// TODO:
 		log.log(Level.INFO, "Replicable Giga Paxos called restore with name={0}, state={1} ", new Object[]{name, state});
 
-		// throw new RuntimeException("Not yet implemented");
-		return true;
+		synchronized (this) {
+			try {
+				if(state.equals("") || state == null){
+					return true;
+				}
+
+				JSONObject jsonObject = new JSONObject(state);
+				HashMap<String, String> newMap = new HashMap<>();
+				Iterator<String> keys = jsonObject.keys();
+				while (keys.hasNext()) {
+					String key = keys.next();
+					newMap.put(key, jsonObject.get(key).toString());
+				}
+				log.log(Level.INFO, "Restored HashMap: {0}", new Object[]{newMap.toString()});
+
+				for(String key: newMap.keySet()) {
+					String[] primary_and_value = key.split("\\|");
+					String[] column_and_value = newMap.get(key).split("\\|");
+					// log.log(Level.INFO, "primary_and_value is {0} and {1}, column is {2} and {3}", new Object[]{primary_and_value[0], primary_and_value[1], column_and_value[0], column_and_value[1]});
+				
+					// update grade SET events=events+[4] where id=452700156
+					String newQuery = "update " + this.table + " SET " + column_and_value[0]+"="+column_and_value[1] + " where " + primary_and_value[0]+"="+primary_and_value[1];
+					this.session.execute(newQuery);
+					log.log(Level.INFO, "Replicable Giga Paxos successfully restored with query: {0}", new Object[]{newQuery});
+				}
+
+				return true;
+
+			} catch(Exception e) {
+				log.log(Level.SEVERE, "SEVERE EXCEPTION IN RESTORE: {0}", new Object[]{e});
+				return false;
+			}
+		}
 	}
 
 
