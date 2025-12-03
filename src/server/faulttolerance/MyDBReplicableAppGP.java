@@ -4,6 +4,7 @@ import com.datastax.driver.core.Cluster;
 import com.datastax.driver.core.Session;
 import com.datastax.driver.core.ResultSet;
 import com.datastax.driver.core.Row;
+import com.datastax.driver.core.ColumnDefinitions;
 
 import edu.umass.cs.gigapaxos.interfaces.Replicable;
 import edu.umass.cs.gigapaxos.interfaces.Request;
@@ -20,6 +21,11 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.HashMap;
+import java.util.Map;
+
+import org.json.JSONException;
+import org.json.JSONObject;
 
 /**
  * This class should implement your {@link Replicable} database app if you wish
@@ -50,6 +56,9 @@ public class MyDBReplicableAppGP implements Replicable {
     protected Session session;
 
 	protected static final Logger log = Logger.getLogger(MyDBReplicableAppGP.class.getName());
+
+	protected String myID;	// aka keyspace
+	protected String table; // assume one table exist for now
 
 	/**
 	 * Set this value to as small a value with which you can get tests to still
@@ -83,6 +92,9 @@ public class MyDBReplicableAppGP implements Replicable {
 		}
 
 		log.log(Level.INFO, "Replicable Giga Paxos started with keyspace {0}", new Object[]{args[0]});
+		System.out.println("Replicable Giga Paxos started with keyspace " + args[0]);
+		myID = args[0];
+		table = "grade";
 	}
 
 	/**
@@ -134,38 +146,49 @@ public class MyDBReplicableAppGP implements Replicable {
 		// TODO: submit request to data store
 
 		synchronized(this) {
+			try {
+				IntegerPacketType packetType = request.getRequestType();		// DECISION
+				String serviceName = request.getServiceName();				// MyDBReplicableAppGP0
+				String requestValue = "";
 
-			IntegerPacketType packetType = request.getRequestType();		// DECISION
-			String serviceName = request.getServiceName();				// MyDBReplicableAppGP0
-			String requestValue = "";
+				if (request instanceof RequestPacket) {
+					requestValue = ((RequestPacket) request).requestValue;
 
-			if (request instanceof RequestPacket) {
-				requestValue = ((RequestPacket) request).requestValue;
+					// log.log(Level.INFO, "Woaw, requestpacket value is {0}", 
+					// 		new Object[]{requestValue});
+				}
+				else {
+					log.log(Level.WARNING, "WARNING: execute received that is not RequestPacket");
+				}
 
-				// log.log(Level.INFO, "Woaw, requestpacket value is {0}", 
-				// 		new Object[]{requestValue});
+				/* CHECK FOR MULTIPLE TABLES */
+				String[] requestComponents = requestValue.split("\\s+");	// split by whitespace
+				if(requestComponents[0].equals("update") && !requestComponents[1].equals(table)) {
+					log.log(Level.SEVERE, "SEVERE WARNING: CANNOT HARDCODE TABLENAME");
+				}
+				
+				ResultSet results = this.session.execute(requestValue);   // deliver message
+
+				String response="";
+				for(Row row : results) {
+					response += row.toString();
+				}
+				log.log(Level.INFO, "Replicable Giga Paxos received Cassandra response ", new Object[]{response});
+
+				if(!doNotReplyToClient) {
+					((RequestPacket) request).setResponse(response);
+				}
+
+				log.log(Level.INFO, "Replicable Giga Paxos finished execute with request={0}, doNotReplyToClient={1}, IntegerPacketType={2}, ServiceName={3}", 
+						new Object[]{request.toString(), doNotReplyToClient, packetType, serviceName});
+
+				checkpoint(serviceName);
+				return true;
 			}
-			else {
-				log.log(Level.WARNING, "WARNING: execute received that is not RequestPacket");
+			catch(Exception e){
+				log.log(Level.WARNING, "Replicable Giga Paxos encountered exception during execute: {0}", new Object[]{e.toString()});
+				return false;
 			}
-
-			log.log(Level.INFO, "Replicable Giga Paxos called execute with request={0}, doNotReplyToClient={1}, IntegerPacketType={2}, ServiceName={3}", 
-					new Object[]{request.toString(), doNotReplyToClient, packetType, serviceName});
-            
-			
-			ResultSet results = this.session.execute(requestValue);   // deliver message
-
-            String response="";
-            for(Row row : results) {
-                response += row.toString();
-            }
-			log.log(Level.INFO, "Replicable Giga Paxos received Cassandra response ", new Object[]{response});
-
-			if(!doNotReplyToClient) {
-				((RequestPacket) request).setResponse(response);
-			}
-
-			return true;
 		}
 		// throw new RuntimeException("Not yet implemented");
 	}
@@ -180,9 +203,9 @@ public class MyDBReplicableAppGP implements Replicable {
 	@Override
 	public boolean execute(Request request) {
 		// TODO: execute the request by sending it to the data store
-		log.log(Level.INFO, "Replicable Giga Paxos called execute with request={0}", new Object[]{request.toString()});
+		log.log(Level.WARNING, "Replicable Giga Paxos called WEIRD execute with request={0}", new Object[]{request.toString()});
 
-		return true;
+		return execute(request, true);
 		// throw new RuntimeException("Not yet implemented");
 	}
 
@@ -205,10 +228,34 @@ public class MyDBReplicableAppGP implements Replicable {
 	@Override
 	public String checkpoint(String name) {
 		// TODO:
-		log.log(Level.INFO, "Replicable Giga Paxos called checkpoint with name={0}", new Object[]{name});
+		synchronized (this) {
+			log.log(Level.INFO, "Replicable Giga Paxos called checkpoint with name={0}", new Object[]{name});
 
-		// throw new RuntimeException("Not yet implemented");
-		return "wassup";
+			String query = String.format("SELECT * FROM %s.%s", this.myID, this.table);
+			ResultSet resultSet = session.execute(query);
+
+			Map<String, String> rowData = new HashMap<>();
+
+			for (Row row : resultSet) {		// for each row (basically key value pair)
+
+				ColumnDefinitions columnDefinitions = row.getColumnDefinitions();
+
+				log.log(Level.INFO, "columnDefinitions length is {0}", new Object[]{columnDefinitions.size()});	// length 2: {id=-1160459191, events=[1890]}
+
+				for (ColumnDefinitions.Definition column : columnDefinitions) {		// should be 2 items per row
+
+					String columnName = column.getName();
+					String columnValue = row.getObject(columnName).toString();
+
+					rowData.put(columnName, columnValue);
+				}
+			}
+			System.out.println("Row Data of " + this.myID + ": " + rowData.toString());
+			log.log(Level.INFO, "Row Data of {0}: {1}", new Object[]{this.myID, rowData.toString()});
+
+			// throw new RuntimeException("Not yet implemented");
+			return rowData.toString();
+		}
 	}
 
 

@@ -24,6 +24,12 @@ docker run --rm -it --network \
 cassandra nuvo/docker-cqlsh cqlsh cassandra \
 9042 --cqlversion='3.4.6'
 
+// cql commands
+DESCRIBE KEYSPACES;
+DESCRIBE KEYSPACE server0;
+SELECT id FROM server0.grade WHERE id=-1077102783;
+
+
 // cleanup
 docker kill cassandra
 docker network rm cassandra
