@@ -2,8 +2,12 @@ package server.faulttolerance;
 
 import com.datastax.driver.core.Cluster;
 import com.datastax.driver.core.Session;
+import com.datastax.driver.core.ResultSet;
+import com.datastax.driver.core.Row;
+
 import edu.umass.cs.gigapaxos.interfaces.Replicable;
 import edu.umass.cs.gigapaxos.interfaces.Request;
+import edu.umass.cs.gigapaxos.paxospackets.RequestPacket;
 import edu.umass.cs.nio.interfaces.IntegerPacketType;
 import edu.umass.cs.nio.interfaces.NodeConfig;
 import edu.umass.cs.nio.nioutils.NIOHeader;
@@ -128,9 +132,42 @@ public class MyDBReplicableAppGP implements Replicable {
 	@Override
 	public boolean execute(Request request, boolean doNotReplyToClient) {
 		// TODO: submit request to data store
-		log.log(Level.INFO, "Replicable Giga Paxos called execute with request={0} and doNotReplyToClient={1}", new Object[]{request.toString(), doNotReplyToClient});
 
-		throw new RuntimeException("Not yet implemented");
+		synchronized(this) {
+
+			IntegerPacketType packetType = request.getRequestType();		// DECISION
+			String serviceName = request.getServiceName();				// MyDBReplicableAppGP0
+			String requestValue = "";
+
+			if (request instanceof RequestPacket) {
+				requestValue = ((RequestPacket) request).requestValue;
+
+				// log.log(Level.INFO, "Woaw, requestpacket value is {0}", 
+				// 		new Object[]{requestValue});
+			}
+			else {
+				log.log(Level.WARNING, "WARNING: execute received that is not RequestPacket");
+			}
+
+			log.log(Level.INFO, "Replicable Giga Paxos called execute with request={0}, doNotReplyToClient={1}, IntegerPacketType={2}, ServiceName={3}", 
+					new Object[]{request.toString(), doNotReplyToClient, packetType, serviceName});
+            
+			
+			ResultSet results = this.session.execute(requestValue);   // deliver message
+
+            String response="";
+            for(Row row : results) {
+                response += row.toString();
+            }
+			log.log(Level.INFO, "Replicable Giga Paxos received Cassandra response ", new Object[]{response});
+
+			if(!doNotReplyToClient) {
+				((RequestPacket) request).setResponse(response);
+			}
+
+			return true;
+		}
+		// throw new RuntimeException("Not yet implemented");
 	}
 
 	/**
