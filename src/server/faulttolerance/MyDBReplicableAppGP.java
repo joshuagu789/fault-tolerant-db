@@ -184,7 +184,6 @@ public class MyDBReplicableAppGP implements Replicable {
 				log.log(Level.INFO, "Replicable Giga Paxos finished execute with request={0}, doNotReplyToClient={1}, IntegerPacketType={2}, ServiceName={3}", 
 						new Object[]{request.toString(), doNotReplyToClient, packetType, serviceName});
 
-				checkpoint(serviceName);
 				return true;
 			}
 			catch(Exception e){
