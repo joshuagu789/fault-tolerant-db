@@ -99,7 +99,7 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 	// long lamport_clock = 0;
 	long counter = 0;
 	HashMap<String, Integer> ackMap = new HashMap<String, Integer>();; 	// counter|query -> number of acks
-	LinkedList<String> queue = new LinkedList<String>();
+	LinkedList<String> queue = new LinkedList<String>();	// counter|query
 
 	boolean isLeader;
 	String leaderID;
@@ -229,7 +229,7 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 		catch(Exception e){
 			log.log(Level.SEVERE, "SEVERE WARNING: EXCEPTION OCCURRED DURING LEADER ELECTION {0}", new Object[]{e});
 		}
-		log.log(Level.INFO, "Server Zookeeper started with keyspace/myID {0}, detected server count is {1}", new Object[]{myID, this.serverCount});
+		log.log(Level.INFO, "Server Zookeeper started with keyspace/myID {0}, detected server count is {1} with leader as {2}", new Object[]{myID, this.serverCount, this.leaderID});
 	}
 
 	/**
@@ -260,7 +260,7 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 	protected void handleMessageFromServer(byte[] bytes, NIOHeader header) {
 		synchronized (this) {
 			try{
-				/* message should be opcode|query for proposal and decisions and opcode|query|id for every other opcode */
+				/* message should be opcode|query for proposal and opcode|query|requestID for every other opcode */
 				String message = new String(bytes, StandardCharsets.UTF_8);
 				String[] message_parts = message.split("\\|");
 
@@ -273,8 +273,9 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 				if(message_parts[0].equals("PROPOSAL")) {		// only leaders get proposals
 					if(this.isLeader) {
 						/* BEGIN MULTICAST */
-						this.counter++;
+						this.counter = this.counter+1;
 						String messageToBroadcast = "PREPARE|" + message_parts[1] + "|" + this.counter;
+						this.queue.add("" + this.counter + "|" + message_parts[1]);
 						for (String node : this.serverMessenger.getNodeConfig().getNodeIDs()) {
 							this.serverMessenger.send(node, messageToBroadcast.getBytes(StandardCharsets.UTF_8));
 						}
@@ -285,7 +286,8 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 				}
 				else if(message_parts[0].equals("PREPARE")) {		// all nodes must respond with prepareack
 					String messageToRespond = "PREPAREACK|" + message_parts[1] + "|" + message_parts[2];;
-					this.serverMessenger.send(header.sndr, messageToRespond.getBytes(StandardCharsets.UTF_8));
+					this.serverMessenger.send(this.leaderID, messageToRespond.getBytes(StandardCharsets.UTF_8));
+					// log.log(Level.INFO, "Server Zookeeper {0} sends message {1} to {2}", new Object[]{this.myID, messageToRespond, this.leaderID});
 				}
 				else if(message_parts[0].equals("PREPAREACK")) {	// leader send DECISION if majority
 
@@ -294,23 +296,43 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 						log.log(Level.SEVERE, "SEVERE WARNING: SERVER ZOOKEEPER {0} this.serverCount={1} but actual number is {2}", new Object[]{this.myID, this.serverCount, numServers});
 					}
 
-					String key = "" + this.counter + "|" + message_parts[1];
+					String key = "" + message_parts[2] + "|" + message_parts[1];
 					if(this.ackMap.containsKey(key)) {
 						this.ackMap.put(key, 1 + this.ackMap.get(key));
 					}
 					else {
 						this.ackMap.put(key, 1);
 					}
-					if(this.ackMap.get(key) > this.serverCount/2) {		// > or >= for majority?
-						String messageToBroadcast = "DECISION|" + message_parts[1];
-						for (String node : this.serverMessenger.getNodeConfig().getNodeIDs()) {
-							this.serverMessenger.send(node, messageToBroadcast.getBytes(StandardCharsets.UTF_8));
+
+					/* FLUSH QUEUE FOR DECISIONS */
+					while(!this.queue.isEmpty()) {
+						String front_message = this.queue.peek();
+						String[] front_message_parts = front_message.split("\\|");
+
+						if(!this.ackMap.containsKey(front_message)) {    // means not ready yet
+							log.log(Level.INFO, "ackMap does not contain {0} yet, returning", new Object[]{front_message});
+							return;
 						}
-						this.ackMap.remove(key);
+						int acks = this.ackMap.get(front_message);
+						log.log(Level.INFO, "front of queue is {0} with {1} acks", new Object[]{front_message, acks});
+
+						if(acks > this.serverCount/2) {		// > or >= for majority?
+							/* MULTICAST DECISION */
+							String messageToBroadcast = "DECISION|" + front_message_parts[1] + "|" + front_message_parts[0];
+							for (String node : this.serverMessenger.getNodeConfig().getNodeIDs()) {
+								this.serverMessenger.send(node, messageToBroadcast.getBytes(StandardCharsets.UTF_8));
+							}
+							this.ackMap.remove(front_message);
+							this.queue.poll();
+							log.log(Level.INFO, "Server Zookeeper {0} popped {1} from front of queue, messageToBroadcast={2}", new Object[]{this.myID, front_message, messageToBroadcast});
+						}
+						else {
+							break;
+						}
 					}
 				}
 				else if(message_parts[0].equals("DECISION")) {	// commit operation
-					log.log(Level.INFO, "Server Zookeeper {0} delivering message {1} after receiving {2}", new Object[]{this.myID, message_parts[1], message});
+					log.log(Level.INFO, "Server Zookeeper {0} delivering counter {1} and message {2} after receiving {3}", new Object[]{this.myID, message_parts[2], message_parts[1], message});
 					this.session.execute(message_parts[1]);
 				}
 
