@@ -27,6 +27,7 @@ import org.apache.zookeeper.ZooKeeper;
 import org.apache.zookeeper.ZooDefs;
 import org.apache.zookeeper.CreateMode;
 import org.apache.zookeeper.AsyncCallback;
+import java.nio.charset.StandardCharsets;
 
 import java.util.HashSet;
 import java.util.Set;
@@ -35,6 +36,9 @@ import java.util.logging.Logger;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Iterator;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.Collections;
 
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -87,7 +91,10 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 
     ZooKeeper zk;
 	protected final String myID;
-
+	String electionPath;
+	String electionNode;
+	boolean isLeader;
+	String leaderID;
 	/**
 	 * @param nodeConfig Server name/address configuration information read
 	 *                      from
@@ -113,7 +120,100 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 		this.zk = new ZooKeeper("127.0.0.1" + ":" + Integer.toString(DEFAULT_PORT), 3000, null);
 
 		this.myID = myID;
+		this.isLeader = false;
 
+		/* LEADER MANAGEMENT */
+		try {
+			zk.create("/election", new byte[0], ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
+		}
+		catch(Exception e) {
+			log.log(Level.INFO, "WARNING: exception during election parent creation, might be because it already exists: {0}", new Object[]{e});
+		}
+		try {
+			/* ADD YOUR OWN ELECTION NODE TO ELECTION SEQUENCE */
+			// each election node has corresponding server id
+			this.electionPath = zk.create("/election/node", this.myID.getBytes(StandardCharsets.UTF_8), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL_SEQUENTIAL);
+			String[] temp = electionPath.split("\\/");
+			this.electionNode = temp[temp.length-1];
+
+			ArrayList<String> nodes = new ArrayList<>(zk.getChildren("/election", false));
+			Collections.sort(nodes);
+
+			log.log(Level.INFO, "Server Zookeeper {0} has electionPath {1} and electionNode {2}", new Object[]{myID, electionPath, electionNode});
+			for(String x: nodes) {
+				log.log(Level.INFO, "Nodes in order is {0}", new Object[]{x});
+			}
+
+			/* FIND LEADER OR CHECK IF YOU ARE LEADER */
+			int indexOfSelf = nodes.indexOf(this.electionNode);
+
+			if(indexOfSelf == 0) {	// first in list, i am the leader!
+				this.isLeader = true;
+				this.leaderID = this.myID;
+				log.log(Level.INFO, "Server Zookeeper {0} with electionPath {1} is now the supreme leader!", new Object[]{myID, electionPath});
+			}
+
+			else {	// i am a follower, i find leader and watch guy before me
+				this.isLeader = false;
+				// String watchNode = nodes.get(indexOfSelf-1);
+				String watchNode = nodes.get(0);
+				// String watchServerID = new String(zk.getData("/election/" + watchNode, false, null), StandardCharsets.UTF_8);
+				this.leaderID = new String(zk.getData("/election/" + watchNode, false, null), StandardCharsets.UTF_8);
+
+				// log.log(Level.INFO, "Server Zookeeper {0} with electionPath {1} now watching server {2} with electionNode {3}, and recognizes leader as {4}", 
+				// 							new Object[]{myID, electionPath, watchServerID, watchNode, this.leaderID});
+				log.log(Level.INFO, "Server Zookeeper {0} with electionPath {1} now watching leader {2} with electionNode {3}", 
+											new Object[]{myID, electionPath, this.leaderID, watchNode});
+
+				/* RECURSIVE WATCH FOR WHENEVER LEADER FAILS */
+				zk.exists("/election/" + watchNode, new Watcher() {
+					public void process(WatchedEvent event)
+					{
+						try{
+							synchronized (this) {
+								// if (event.getType() == Event.EventType.NodeDeleted) {	// a node got destroyed
+									ArrayList<String> nodes = new ArrayList<>(zk.getChildren("/election", false));
+									Collections.sort(nodes);
+									int indexOfSelf = nodes.indexOf(electionNode);
+
+									if (indexOfSelf == 0) {	// i am new leader
+										isLeader = true;
+										leaderID = myID;
+										log.log(Level.INFO, "Server Zookeeper {0} with electionNode {1} is now the supreme leader!", new Object[]{leaderID, electionNode});
+									}
+									else {		// i watch new guy
+										isLeader = false;
+										String watchNode = nodes.get(0);
+										// String watchServerID = new String(zk.getData("/election/" + watchNode, false, null), StandardCharsets.UTF_8);
+										leaderID = new String(zk.getData("/election/" + watchNode, false, null), StandardCharsets.UTF_8);
+										log.log(Level.INFO, "Server Zookeeper {0} with electionPath {1} now watching leader {2} with electionNode {3}", 
+																	new Object[]{myID, electionPath, leaderID, watchNode});
+										zk.exists("/election/" + watchNode, this);
+									}
+								// }
+							}
+						}
+						catch(Exception e) {
+							log.log(Level.SEVERE, "SEVERE WARNING: EXCEPTION OCCURRED DURING LEADER ELECTION WATCHER {0}", new Object[]{e});
+						}
+					}
+				});
+			}
+			// String watchNode = nodes.get(
+			// 	Collections.binarySearch(nodes, currentNode) - 1);
+			// zk.exists("/election/" + watchNode, new Watcher() {
+			// 	public void process(WatchedEvent event)
+			// 	{
+			// 		if (event.getType()
+			// 			== Event.EventType.NodeDeleted) {
+			// 			// Recheck if this node is now the leader
+			// 		}
+			// 	}
+			// });
+		}
+		catch(Exception e){
+			log.log(Level.SEVERE, "SEVERE WARNING: EXCEPTION OCCURRED DURING LEADER ELECTION {0}", new Object[]{e});
+		}
 		log.log(Level.INFO, "Server Zookeeper started with keyspace/myID {0}", new Object[]{myID});
 	}
 
