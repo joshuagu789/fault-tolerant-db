@@ -1,5 +1,13 @@
 package server.faulttolerance;
 
+/* CASSANDRA */
+import com.datastax.driver.core.Cluster;
+import com.datastax.driver.core.Session;
+import com.datastax.driver.core.ResultSet;
+import com.datastax.driver.core.Row;
+import com.datastax.driver.core.ColumnDefinitions;
+
+/* CLIENT/SERVER MESSAGING */
 import edu.umass.cs.nio.interfaces.NodeConfig;
 import edu.umass.cs.nio.nioutils.NIOHeader;
 import edu.umass.cs.nio.nioutils.NodeConfigUtils;
@@ -9,6 +17,27 @@ import server.ReplicatedServer;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+
+/* ZOOKEEPER */
+import org.apache.zookeeper.KeeperException;
+import org.apache.zookeeper.WatchedEvent;
+import org.apache.zookeeper.Watcher;
+import org.apache.zookeeper.ZooKeeper;
+// import com.example.DataMonitor;
+import org.apache.zookeeper.ZooDefs;
+import org.apache.zookeeper.CreateMode;
+import org.apache.zookeeper.AsyncCallback;
+
+import java.util.HashSet;
+import java.util.Set;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Iterator;
+
+import org.json.JSONException;
+import org.json.JSONObject;
 
 /**
  * This class should implement your replicated fault-tolerant database server if
@@ -56,6 +85,9 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 
 	public static final int DEFAULT_PORT = 2181;
 
+    ZooKeeper zk;
+	protected final String myID;
+
 	/**
 	 * @param nodeConfig Server name/address configuration information read
 	 *                      from
@@ -74,6 +106,15 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 						.SERVER_PORT_OFFSET), isaDB, myID);
 
 		// TODO: Make sure to do any needed crash recovery here.
+
+		/* CONNECT TO SERVICES */
+        cluster = Cluster.builder().addContactPoint("127.0.0.1").build();
+        session = cluster.connect(myID);
+		this.zk = new ZooKeeper("127.0.0.1" + ":" + Integer.toString(DEFAULT_PORT), 3000, null);
+
+		this.myID = myID;
+
+		log.log(Level.INFO, "Server Zookeeper started with keyspace/myID {0}", new Object[]{myID});
 	}
 
 	/**
