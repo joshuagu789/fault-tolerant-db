@@ -8,6 +8,8 @@ import com.datastax.driver.core.Row;
 import com.datastax.driver.core.ColumnDefinitions;
 
 /* CLIENT/SERVER MESSAGING */
+import edu.umass.cs.nio.AbstractBytePacketDemultiplexer;
+import edu.umass.cs.nio.MessageNIOTransport;
 import edu.umass.cs.nio.interfaces.NodeConfig;
 import edu.umass.cs.nio.nioutils.NIOHeader;
 import edu.umass.cs.nio.nioutils.NodeConfigUtils;
@@ -26,6 +28,7 @@ import org.apache.zookeeper.ZooKeeper;
 // import com.example.DataMonitor;
 import org.apache.zookeeper.ZooDefs;
 import org.apache.zookeeper.CreateMode;
+import org.apache.cassandra.cql3.Cql_Parser.mbean_return;
 import org.apache.zookeeper.AsyncCallback;
 import java.nio.charset.StandardCharsets;
 
@@ -39,6 +42,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedList;
 
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -91,10 +95,20 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 
     ZooKeeper zk;
 	protected final String myID;
-	String electionPath;
-	String electionNode;
+	int serverCount;
+	// long lamport_clock = 0;
+	long counter = 0;
+	HashMap<String, Integer> ackMap = new HashMap<String, Integer>();; 	// counter|query -> number of acks
+	LinkedList<String> queue = new LinkedList<String>();
+
 	boolean isLeader;
 	String leaderID;
+
+	String electionPath;
+	String electionNode;
+
+    protected final MessageNIOTransport<String,String> serverMessenger;
+
 	/**
 	 * @param nodeConfig Server name/address configuration information read
 	 *                      from
@@ -115,12 +129,24 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 		// TODO: Make sure to do any needed crash recovery here.
 
 		/* CONNECT TO SERVICES */
-        cluster = Cluster.builder().addContactPoint("127.0.0.1").build();
-        session = cluster.connect(myID);
+        // cluster = Cluster.builder().addContactPoint("127.0.0.1").build();
+        // session = cluster.connect(myID);
+		this.serverMessenger =  new
+                MessageNIOTransport<String, String>(myID, nodeConfig,
+                new
+                        AbstractBytePacketDemultiplexer() {
+                            @Override
+                            public boolean handleMessage(byte[] bytes, NIOHeader nioHeader) {
+                                handleMessageFromServer(bytes, nioHeader);
+                                return true;
+                            }
+                        }, true);
+
 		this.zk = new ZooKeeper("127.0.0.1" + ":" + Integer.toString(DEFAULT_PORT), 3000, null);
 
 		this.myID = myID;
 		this.isLeader = false;
+		this.serverCount = this.serverMessenger.getNodeConfig().getNodeIDs().size();
 
 		/* LEADER MANAGEMENT */
 		try {
@@ -199,36 +225,99 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 					}
 				});
 			}
-			// String watchNode = nodes.get(
-			// 	Collections.binarySearch(nodes, currentNode) - 1);
-			// zk.exists("/election/" + watchNode, new Watcher() {
-			// 	public void process(WatchedEvent event)
-			// 	{
-			// 		if (event.getType()
-			// 			== Event.EventType.NodeDeleted) {
-			// 			// Recheck if this node is now the leader
-			// 		}
-			// 	}
-			// });
 		}
 		catch(Exception e){
 			log.log(Level.SEVERE, "SEVERE WARNING: EXCEPTION OCCURRED DURING LEADER ELECTION {0}", new Object[]{e});
 		}
-		log.log(Level.INFO, "Server Zookeeper started with keyspace/myID {0}", new Object[]{myID});
+		log.log(Level.INFO, "Server Zookeeper started with keyspace/myID {0}, detected server count is {1}", new Object[]{myID, this.serverCount});
 	}
 
 	/**
 	 * TODO: process bytes received from clients here.
 	 */
 	protected void handleMessageFromClient(byte[] bytes, NIOHeader header) {
-		throw new RuntimeException("Not implemented");
+        
+		synchronized (this) {
+			try{
+				String request = new String(bytes, StandardCharsets.UTF_8);
+
+				// forward the request to the leader as a proposal   
+				String proposal = "PROPOSAL|" +  request;
+				this.serverMessenger.send(this.leaderID, proposal.getBytes(StandardCharsets.UTF_8)); 
+
+				log.log(Level.INFO, "Server Zookeeper {0} received client message {1} from {2}, sending {3} to {4}",
+						new Object[]{this.myID, request, header.sndr, proposal, this.leaderID});
+
+			} catch (Exception e) {
+				log.log(Level.SEVERE, "SEVERE WARNING: EXCEPTION OCCURRED FOR {0} IN handleMessageFromClient {1}", new Object[]{this.myID, e});
+			}	
+		}
 	}
 
 	/**
 	 * TODO: process bytes received from fellow servers here.
 	 */
 	protected void handleMessageFromServer(byte[] bytes, NIOHeader header) {
-		throw new RuntimeException("Not implemented");
+		synchronized (this) {
+			try{
+				/* message should be opcode|query for proposal and decisions and opcode|query|id for every other opcode */
+				String message = new String(bytes, StandardCharsets.UTF_8);
+				String[] message_parts = message.split("\\|");
+
+				if(message_parts.length <= 1) { // use only messages containing | as that is how I format messages
+					return;
+				}
+
+				log.log(Level.INFO, "Server Zookeeper {0} received server message {1} from {2}", new Object[]{this.myID, message, header.sndr});
+
+				if(message_parts[0].equals("PROPOSAL")) {		// only leaders get proposals
+					if(this.isLeader) {
+						/* BEGIN MULTICAST */
+						this.counter++;
+						String messageToBroadcast = "PREPARE|" + message_parts[1] + "|" + this.counter;
+						for (String node : this.serverMessenger.getNodeConfig().getNodeIDs()) {
+							this.serverMessenger.send(node, messageToBroadcast.getBytes(StandardCharsets.UTF_8));
+						}
+					}
+					else {
+						log.log(Level.SEVERE, "SEVERE WARNING: SERVER ZOOKEEPER {0} RECEIVED {1} BUT {2} IS LEADER", new Object[]{this.myID, message, this.leaderID});
+					}
+				}
+				else if(message_parts[0].equals("PREPARE")) {		// all nodes must respond with prepareack
+					String messageToRespond = "PREPAREACK|" + message_parts[1] + "|" + message_parts[2];;
+					this.serverMessenger.send(header.sndr, messageToRespond.getBytes(StandardCharsets.UTF_8));
+				}
+				else if(message_parts[0].equals("PREPAREACK")) {	// leader send DECISION if majority
+
+					int numServers = this.serverMessenger.getNodeConfig().getNodeIDs().size();
+					if(this.serverCount != numServers) {
+						log.log(Level.SEVERE, "SEVERE WARNING: SERVER ZOOKEEPER {0} this.serverCount={1} but actual number is {2}", new Object[]{this.myID, this.serverCount, numServers});
+					}
+
+					String key = "" + this.counter + "|" + message_parts[1];
+					if(this.ackMap.containsKey(key)) {
+						this.ackMap.put(key, 1 + this.ackMap.get(key));
+					}
+					else {
+						this.ackMap.put(key, 1);
+					}
+					if(this.ackMap.get(key) > this.serverCount/2) {		// > or >= for majority?
+						String messageToBroadcast = "DECISION|" + message_parts[1];
+						for (String node : this.serverMessenger.getNodeConfig().getNodeIDs()) {
+							this.serverMessenger.send(node, messageToBroadcast.getBytes(StandardCharsets.UTF_8));
+						}
+						this.ackMap.remove(key);
+					}
+				}
+				else if(message_parts[0].equals("DECISION")) {	// commit operation
+					log.log(Level.INFO, "Server Zookeeper {0} delivering message {1} after receiving {2}", new Object[]{this.myID, message_parts[1], message});
+					this.session.execute(message_parts[1]);
+				}
+
+			} catch (Exception e) {
+				log.log(Level.SEVERE, "SEVERE WARNING: EXCEPTION OCCURRED FOR {0} IN handleMessageFromServer {1}", new Object[]{this.myID, e});
+			}	
+		}	
 	}
 
 
@@ -236,7 +325,10 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 	 * TODO: Gracefully close any threads or messengers you created.
 	 */
 	public void close() {
-		throw new RuntimeException("Not implemented");
+		super.close();
+	    this.serverMessenger.stop();
+	    session.close();
+	    cluster.close();
 	}
 
 	public static enum CheckpointRecovery {
