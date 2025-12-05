@@ -275,31 +275,6 @@ public class MyDBReplicableAppGP implements Replicable {
 			log.log(Level.INFO, "Row Data of {0}: {1}", new Object[]{this.myID, rowData.toString()});
 
     		JSONObject json = new JSONObject(rowData);
-
-			// try {
-			// 	JSONObject jsonObject = new JSONObject(json.toString());
-			// 	HashMap<String, String> newMap = new HashMap<>();
-			// 	Iterator<String> keys = jsonObject.keys();
-			// 	while (keys.hasNext()) {
-			// 		String key = keys.next();
-			// 		newMap.put(key, jsonObject.get(key).toString());
-			// 	}
-			// 	log.log(Level.INFO, "Restored HashMap: {0}", new Object[]{newMap.toString()});
-
-			// 	for(String key: newMap.keySet()) {
-			// 		String[] primary_and_value = key.split("\\|");
-			// 		String[] column_and_value = newMap.get(key).split("\\|");
-			// 		// log.log(Level.INFO, "primary_and_value is {0} and {1}, column is {2} and {3}", new Object[]{primary_and_value[0], primary_and_value[1], column_and_value[0], column_and_value[1]});
-				
-			// 		// update grade SET events=events+[4] where id=452700156
-			// 		String newQuery = "update " + this.table + " SET " + column_and_value[0]+"="+column_and_value[1] + " where " + primary_and_value[0]+"="+primary_and_value[1];
-			// 		this.session.execute(newQuery);
-			// 		log.log(Level.INFO, "Replicable Giga Paxos successfully restored with query: {0}", new Object[]{newQuery});
-			// 	}
-			// }
-			// catch(Exception e) {
-			// 	log.log(Level.SEVERE, "SEVERE EXCEPTION IN RESTORE: {0}", new Object[]{e});
-			// }
 			return json.toString();
 		}
 	}

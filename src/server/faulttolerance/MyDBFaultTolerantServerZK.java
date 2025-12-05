@@ -96,7 +96,8 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
     ZooKeeper zk;
 	protected final String myID;
 	int serverCount;
-	// long lamport_clock = 0;
+	String table;
+
 	long counter = 0;
 	long expected_counter = 1;
 
@@ -132,8 +133,7 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 		// TODO: Make sure to do any needed crash recovery here.
 
 		/* CONNECT TO SERVICES */
-        // cluster = Cluster.builder().addContactPoint("127.0.0.1").build();
-        // session = cluster.connect(myID);
+
 		this.serverMessenger =  new
                 MessageNIOTransport<String, String>(myID, nodeConfig,
                 new
@@ -150,13 +150,16 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 		this.myID = myID;
 		this.isLeader = false;
 		this.serverCount = this.serverMessenger.getNodeConfig().getNodeIDs().size();
+		table = "grade";	// hard coded
 
 		/* LEADER MANAGEMENT */
 		try {
+			String emptyString = "";
+			zk.create("/state", emptyString.getBytes(StandardCharsets.UTF_8), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
 			zk.create("/election", new byte[0], ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
 		}
 		catch(Exception e) {
-			log.log(Level.INFO, "WARNING: exception during election parent creation, might be because it already exists: {0}", new Object[]{e});
+			log.log(Level.INFO, "WARNING: exception during election parent and state creation, might be because it already exists: {0}", new Object[]{e});
 		}
 		try {
 			/* ADD YOUR OWN ELECTION NODE TO ELECTION SEQUENCE */
@@ -198,6 +201,12 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 				zk.exists("/election/" + watchNode, new Watcher() {
 					public void process(WatchedEvent event)
 					{
+						log.log(Level.INFO, "Server Zookeeper {0} called watch, that must mean leader {1} is down!", new Object[]{myID, leaderID});
+						
+						restore();	// to be safe, everyone reset to this previous checkpoint
+						/* RESET counters (request ids), as they were lost when leader went down */
+						counter = 0;
+						expected_counter = 1;
 						try{
 							synchronized (this) {
 								// if (event.getType() == Event.EventType.NodeDeleted) {	// a node got destroyed
@@ -233,6 +242,112 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 			log.log(Level.SEVERE, "SEVERE WARNING: EXCEPTION OCCURRED DURING LEADER ELECTION {0}", new Object[]{e});
 		}
 		log.log(Level.INFO, "Server Zookeeper started with keyspace/myID {0}, detected server count is {1} with leader as {2}", new Object[]{myID, this.serverCount, this.leaderID});
+		restore();
+	}
+
+	protected void checkpoint() {	// similar to gigapaxos
+
+		try{
+			synchronized (this) {
+				// log.log(Level.INFO, "Server Zookeeper {0} called checkpoint", new Object[]{this.myID});
+
+				String query = String.format("SELECT * FROM %s.%s", this.myID, this.table);
+				ResultSet resultSet = session.execute(query);
+
+				Map<String, String> rowData = new HashMap<>();	// primary key name | value -> column name | value | ...
+
+				for (Row row : resultSet) {		// for each row (basically key value pair)
+
+					ColumnDefinitions columnDefinitions = row.getColumnDefinitions();
+
+					// log.log(Level.INFO, "columnDefinitions length is {0}", new Object[]{columnDefinitions.size()});	// length 2: {id=-1160459191, events=[1890]}
+
+					int index = 0;
+					String primaryKey = "ERROR, PRIMARY KEY UNITIALIZED";
+
+					for (ColumnDefinitions.Definition column : columnDefinitions) {		// assume first column is primary key
+
+						String columnName = column.getName();
+						String columnValue = row.getObject(columnName).toString();
+						String columnTuple = columnName + "|" + columnValue;
+
+						if(columnValue.equals("")) {
+							log.log(Level.SEVERE, "SEVERE WARNING: value is empty quotes for column name {0}", new Object[]{columnName});	// length 2: {id=-1160459191, events=[1890]}
+							columnValue = "[]";
+						}
+
+						if(index == 0){	// primary key
+
+							primaryKey = columnTuple;
+							rowData.put(primaryKey, "");
+						}
+						else if(index == 1){
+							rowData.put(primaryKey, columnTuple);
+						}
+						else {
+							rowData.put(primaryKey, rowData.get(primaryKey) + "|" + columnTuple);
+						}
+						index++;
+					}
+				}
+
+				log.log(Level.INFO, "Row Data of {0}: {1}", new Object[]{this.myID, rowData.toString()});
+
+				JSONObject json = new JSONObject(rowData);
+				String state = json.toString();
+
+				/* WRITE STATE INTO ZOOKEEPER */
+				try {
+					zk.setData("/state", state.getBytes(StandardCharsets.UTF_8), -1);	// -1 means match any version
+				}
+				catch(Exception e) {
+					log.log(Level.INFO, "WARNING: exception during checkpoint: {0}", new Object[]{e});
+				}
+			}
+		}
+		catch(Exception e) {
+			log.log(Level.SEVERE, "SEVERE EXCEPTION IN CHECKPOINT: {0}", new Object[]{e});
+		}
+}
+
+	protected void restore() {	// similar to gigapaxos
+		// log.log(Level.INFO, "Replicable Giga Paxos called restore with name={0}, state={1} ", new Object[]{name, state});
+
+		synchronized (this) {
+			try {
+
+				String state = new String(zk.getData("/state", false, null), StandardCharsets.UTF_8);
+
+				log.log(Level.INFO, "Server Zookeeper {0} called restore with state as {1}", new Object[]{this.myID, state});
+
+				if(state.equals("") || state == null){
+					return;
+				}
+
+				JSONObject jsonObject = new JSONObject(state);
+				HashMap<String, String> newMap = new HashMap<>();
+				Iterator<String> keys = jsonObject.keys();
+				while (keys.hasNext()) {
+					String key = keys.next();
+					newMap.put(key, jsonObject.get(key).toString());
+				}
+				log.log(Level.INFO, "Restored HashMap: {0}", new Object[]{newMap.toString()});
+
+				for(String key: newMap.keySet()) {
+					String[] primary_and_value = key.split("\\|");
+					String[] column_and_value = newMap.get(key).split("\\|");
+					// log.log(Level.INFO, "primary_and_value is {0} and {1}, column is {2} and {3}", new Object[]{primary_and_value[0], primary_and_value[1], column_and_value[0], column_and_value[1]});
+				
+					// update grade SET events=events+[4] where id=452700156
+					String newQuery = "update " + this.table + " SET " + column_and_value[0]+"="+column_and_value[1] + " where " + primary_and_value[0]+"="+primary_and_value[1];
+					this.session.execute(newQuery);
+					log.log(Level.INFO, "Server Zookeeper successfully restored with query: {0}", new Object[]{newQuery});
+				}
+
+			} catch(Exception e) {
+				log.log(Level.SEVERE, "SEVERE EXCEPTION IN RESTORE: {0}", new Object[]{e});
+			}
+		}
 	}
 
 	/**
@@ -271,10 +386,12 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 					return;
 				}
 
-				log.log(Level.INFO, "Server Zookeeper {0} received server message {1} from {2}", new Object[]{this.myID, message, header.sndr});
+				// log.log(Level.INFO, "Server Zookeeper {0} received server message {1} from {2}", new Object[]{this.myID, message, header.sndr});
 
 				if(message_parts[0].equals("PROPOSAL")) {		// only leaders get proposals
 					if(this.isLeader) {
+						log.log(Level.INFO, "Server Zookeeper {0} received server PROPOSAL {1}", new Object[]{this.myID, message});
+
 						/* BEGIN MULTICAST */
 						this.counter = this.counter+1;
 						String messageToBroadcast = "PREPARE|" + message_parts[1] + "|" + this.counter;
@@ -359,6 +476,9 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 						else {
 							break;
 						}
+					}
+					if(this.isLeader){
+						checkpoint();
 					}
 				}
 
