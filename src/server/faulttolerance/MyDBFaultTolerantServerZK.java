@@ -155,6 +155,8 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 		/* LEADER MANAGEMENT */
 		try {
 			String emptyString = "";
+			String defaultCounter = "0";
+			zk.create("/counter", defaultCounter.getBytes(StandardCharsets.UTF_8), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
 			zk.create("/state", emptyString.getBytes(StandardCharsets.UTF_8), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
 			zk.create("/election", new byte[0], ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
 		}
@@ -162,6 +164,7 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 			log.log(Level.INFO, "WARNING: exception during election parent and state creation, might be because it already exists: {0}", new Object[]{e});
 		}
 		try {
+
 			/* ADD YOUR OWN ELECTION NODE TO ELECTION SEQUENCE */
 			// each election node has corresponding server id
 			this.electionPath = zk.create("/election/node", this.myID.getBytes(StandardCharsets.UTF_8), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL_SEQUENTIAL);
@@ -187,13 +190,9 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 
 			else {	// i am a follower, i find leader and watch guy before me
 				this.isLeader = false;
-				// String watchNode = nodes.get(indexOfSelf-1);
 				String watchNode = nodes.get(0);
-				// String watchServerID = new String(zk.getData("/election/" + watchNode, false, null), StandardCharsets.UTF_8);
 				this.leaderID = new String(zk.getData("/election/" + watchNode, false, null), StandardCharsets.UTF_8);
 
-				// log.log(Level.INFO, "Server Zookeeper {0} with electionPath {1} now watching server {2} with electionNode {3}, and recognizes leader as {4}", 
-				// 							new Object[]{myID, electionPath, watchServerID, watchNode, this.leaderID});
 				log.log(Level.INFO, "Server Zookeeper {0} with electionPath {1} now watching leader {2} with electionNode {3}", 
 											new Object[]{myID, electionPath, this.leaderID, watchNode});
 
@@ -201,14 +200,19 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 				zk.exists("/election/" + watchNode, new Watcher() {
 					public void process(WatchedEvent event)
 					{
-						log.log(Level.INFO, "Server Zookeeper {0} called watch, that must mean leader {1} is down!", new Object[]{myID, leaderID});
-						
-						restore();	// to be safe, everyone reset to this previous checkpoint
-						/* RESET counters (request ids), as they were lost when leader went down */
-						counter = 0;
-						expected_counter = 1;
 						try{
 							synchronized (this) {
+
+								log.log(Level.INFO, "Server Zookeeper {0} called watch, that must mean leader {1} is down!", new Object[]{myID, leaderID});
+								
+								restore();	// to be safe, everyone reset to this previous checkpoint
+								/* RESET counters (request ids), as they were lost when leader went down */
+								counter = 0;
+								expected_counter = 1;
+								String zero = "0";
+
+								zk.setData("/counter", zero.getBytes(StandardCharsets.UTF_8), -1);	// -1 means match any version
+
 								// if (event.getType() == Event.EventType.NodeDeleted) {	// a node got destroyed
 									ArrayList<String> nodes = new ArrayList<>(zk.getChildren("/election", false));
 									Collections.sort(nodes);
@@ -246,7 +250,17 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 			log.log(Level.SEVERE, "SEVERE WARNING: EXCEPTION OCCURRED DURING LEADER ELECTION {0}", new Object[]{e});
 		}
 		log.log(Level.INFO, "Server Zookeeper started with keyspace/myID {0}, detected server count is {1} with leader as {2}", new Object[]{myID, this.serverCount, this.leaderID});
+		
 		restore();
+		try{
+			/* RECOVER SLOT NUMBER FOR NONLEADER */
+			String slotNumber = new String(zk.getData("/counter", false, null), StandardCharsets.UTF_8);
+			this.counter = Long.parseLong(slotNumber);
+			this.expected_counter = this.counter+1;
+		}
+		catch(Exception e) {
+			log.log(Level.SEVERE, "SEVERE WARNING: EXCEPTION OCCURRED DURING COUNTER RESTORATION {0}", new Object[]{e});
+		}
 	}
 
 	protected void checkpoint() {	// similar to gigapaxos
@@ -302,7 +316,9 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 
 				/* WRITE STATE INTO ZOOKEEPER */
 				try {
+					String saved_counter = String.valueOf(this.counter);
 					zk.setData("/state", state.getBytes(StandardCharsets.UTF_8), -1);	// -1 means match any version
+					zk.setData("/counter", state.getBytes(StandardCharsets.UTF_8), -1);	// -1 means match any version
 				}
 				catch(Exception e) {
 					log.log(Level.INFO, "WARNING: exception during checkpoint: {0}", new Object[]{e});
@@ -395,6 +411,7 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 				if(message_parts[0].equals("PROPOSAL")) {		// only leaders get proposals
 					if(this.isLeader) {
 						log.log(Level.INFO, "Server Zookeeper {0} received server PROPOSAL {1}", new Object[]{this.myID, message});
+						System.out.printf("Server Zookeeper %s received server PROPOSAL %s\n", this.myID, message);
 
 						/* BEGIN MULTICAST */
 						this.counter = this.counter+1;
@@ -450,6 +467,7 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 							this.ackMap.remove(front_message);
 							this.queue.poll();
 							log.log(Level.INFO, "Server Zookeeper {0} popped {1} from front of queue, messageToBroadcast={2}", new Object[]{this.myID, front_message, messageToBroadcast});
+							System.out.printf("Server Zookeeper %s popped %s from front of queue, messageToBroadcast=%s\n", this.myID, front_message, messageToBroadcast);
 						}
 						else {
 							break;
@@ -474,6 +492,7 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 						long front_counter = Long.parseLong(front_message_parts[0]);
 						if(front_counter <= this.expected_counter) {
 							log.log(Level.INFO, "Server Zookeeper {0} expected counter {1}, delivering counter {2} and message {3}", new Object[]{this.myID, this.expected_counter, front_counter, front_message_parts[1]});
+							System.out.printf("Server Zookeeper %s expected counter %d, delivering counter %d and message %s\n", this.myID, this.expected_counter, front_counter, front_message_parts[1]);
 							this.session.execute(front_message_parts[1]);
 							this.expected_counter = front_counter+1;
 							this.deliverQueue.poll();
