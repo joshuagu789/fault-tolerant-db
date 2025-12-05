@@ -98,8 +98,11 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 	int serverCount;
 	// long lamport_clock = 0;
 	long counter = 0;
+	long expected_counter = 1;
+
 	HashMap<String, Integer> ackMap = new HashMap<String, Integer>();; 	// counter|query -> number of acks
 	LinkedList<String> queue = new LinkedList<String>();	// counter|query
+	LinkedList<String> deliverQueue = new LinkedList<String>();	// counter|query
 
 	boolean isLeader;
 	String leaderID;
@@ -331,9 +334,32 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 						}
 					}
 				}
-				else if(message_parts[0].equals("DECISION")) {	// commit operation
-					log.log(Level.INFO, "Server Zookeeper {0} delivering counter {1} and message {2} after receiving {3}", new Object[]{this.myID, message_parts[2], message_parts[1], message});
-					this.session.execute(message_parts[1]);
+				else if(message_parts[0].equals("DECISION")) {	// commit operation once its in order
+
+					this.deliverQueue.add("" + message_parts[2] + "|" + message_parts[1]);
+                    this.deliverQueue.sort((s1, s2) -> {
+                        String[] s1_parts = s1.split("\\|");	// [counter, request]
+                        String[] s2_parts = s2.split("\\|");
+
+                        return s1_parts[0].compareTo(s2_parts[0]);
+                    });
+
+					/* FLUSH COMMIT OPERATIONS */
+					while(!this.deliverQueue.isEmpty()) {
+						String front_message = this.deliverQueue.peek();
+						String[] front_message_parts = front_message.split("\\|");	
+
+						long front_counter = Long.parseLong(front_message_parts[0]);
+						if(front_counter <= this.expected_counter) {
+							log.log(Level.INFO, "Server Zookeeper {0} expected counter {1}, delivering counter {2} and message {3}", new Object[]{this.myID, this.expected_counter, front_counter, front_message_parts[1]});
+							this.session.execute(front_message_parts[1]);
+							this.expected_counter = front_counter+1;
+							this.deliverQueue.poll();
+						}
+						else {
+							break;
+						}
+					}
 				}
 
 			} catch (Exception e) {
