@@ -101,7 +101,7 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 	long counter = 0;
 	long expected_counter = 1;
 
-	HashMap<String, Integer> ackMap = new HashMap<String, Integer>();; 	// counter|query -> number of acks
+	HashMap<String, Integer> ackMap = new HashMap<String, Integer>(); 	// counter|query -> number of acks
 	LinkedList<String> queue = new LinkedList<String>();	// counter|query
 	LinkedList<String> deliverQueue = new LinkedList<String>();	// counter|query
 
@@ -218,6 +218,10 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 										isLeader = true;
 										leaderID = myID;
 										log.log(Level.INFO, "Server Zookeeper {0} with electionNode {1} is now the supreme leader!", new Object[]{leaderID, electionNode});
+										/* all prior processing proposals get dropped */
+										queue = new LinkedList<String>();
+										ackMap = new HashMap<String, Integer>();
+										deliverQueue = new LinkedList<String>();
 									}
 									else {		// i watch new guy
 										isLeader = false;
@@ -291,7 +295,7 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 					}
 				}
 
-				log.log(Level.INFO, "Row Data of {0}: {1}", new Object[]{this.myID, rowData.toString()});
+				// log.log(Level.INFO, "Row Data of {0}: {1}", new Object[]{this.myID, rowData.toString()});
 
 				JSONObject json = new JSONObject(rowData);
 				String state = json.toString();
@@ -331,7 +335,7 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 					String key = keys.next();
 					newMap.put(key, jsonObject.get(key).toString());
 				}
-				log.log(Level.INFO, "Restored HashMap: {0}", new Object[]{newMap.toString()});
+				// log.log(Level.INFO, "Restored HashMap: {0}", new Object[]{newMap.toString()});
 
 				for(String key: newMap.keySet()) {
 					String[] primary_and_value = key.split("\\|");
@@ -341,7 +345,7 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 					// update grade SET events=events+[4] where id=452700156
 					String newQuery = "update " + this.table + " SET " + column_and_value[0]+"="+column_and_value[1] + " where " + primary_and_value[0]+"="+primary_and_value[1];
 					this.session.execute(newQuery);
-					log.log(Level.INFO, "Server Zookeeper successfully restored with query: {0}", new Object[]{newQuery});
+					// log.log(Level.INFO, "Server Zookeeper successfully restored with query: {0}", new Object[]{newQuery});
 				}
 
 			} catch(Exception e) {
@@ -423,6 +427,7 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 					else {
 						this.ackMap.put(key, 1);
 					}
+					log.log(Level.INFO, "Server Zookeeper {0} receives {1}, ack count now {2}", new Object[]{this.myID, message, this.ackMap.get(key)});
 
 					/* FLUSH QUEUE FOR DECISIONS */
 					while(!this.queue.isEmpty()) {
@@ -495,8 +500,8 @@ public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
 	public void close() {
 		super.close();
 	    this.serverMessenger.stop();
-	    session.close();
-	    cluster.close();
+	    // session.close();
+	    // cluster.close();
 	}
 
 	public static enum CheckpointRecovery {
